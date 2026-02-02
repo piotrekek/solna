@@ -1374,10 +1374,22 @@
         let scores = JSON.parse(localStorage.getItem(key) || '[]');
         
         const normalizedNick = nick.toLowerCase().trim();
-        scores = scores.filter(score => score.nick.toLowerCase().trim() !== normalizedNick);
         
-        const oldBestTime = scores.length > 0 ? Math.min(...scores.map(s => s.time)) : Infinity;
-        const isNewLocalRecord = scores.length === 0 || time < oldBestTime;
+        // Znajdź najlepszy istniejący wynik dla tego nicka (jeśli istnieje)
+        const existingScoresForNick = scores.filter(score => score.nick.toLowerCase().trim() === normalizedNick);
+        const bestExistingTime = existingScoresForNick.length > 0 
+            ? Math.min(...existingScoresForNick.map(s => s.time))
+            : Infinity;
+        
+        // Jeśli nowy wynik jest gorszy niż najlepszy istniejący, nie dodawaj go
+        if (time > bestExistingTime) {
+            console.log('Nowy wynik gorszy niż najlepszy istniejący dla tego nicka - pomijam');
+            renderScores();
+            return;
+        }
+        
+        // Usuń wszystkie wcześniejsze wyniki dla tego nicka (dodamy tylko najlepszy)
+        scores = scores.filter(score => score.nick.toLowerCase().trim() !== normalizedNick);
         
         const newScore = {
             nick: nick.trim(),
@@ -1401,35 +1413,44 @@
             if (response.ok) {
                 const data = await response.json();
                 const allScores = data.record || { "7": [], "12": [], "15": [] };
-                const globalScores = allScores[currentSize] || [];
+                let globalScores = allScores[currentSize] || [];
                 
-                // Znajdź najlepszy czas w rankingu globalnym
-                const bestGlobalTime = globalScores.length > 0 ? Math.min(...globalScores.map(s => s.time)) : Infinity;
-                if (time < bestGlobalTime) {
-                    isNewGlobalRecord = true;
-                    console.log('🎉 NOWY REKORD GLOBALNY!', nick, time, 's');
-                }
-                
-                // Aktualizuj ranking globalny
-                if (!allScores[currentSize]) allScores[currentSize] = [];
-                
-                allScores[currentSize] = allScores[currentSize].filter(
-                    score => score.nick.toLowerCase().trim() !== normalizedNick
+                // Znajdź najlepszy istniejący wynik dla tego nicka w rankingu globalnym
+                const existingGlobalScoresForNick = globalScores.filter(
+                    score => score.nick.toLowerCase().trim() === normalizedNick
                 );
+                const bestExistingGlobalTime = existingGlobalScoresForNick.length > 0
+                    ? Math.min(...existingGlobalScoresForNick.map(s => s.time))
+                    : Infinity;
                 
-                allScores[currentSize].push(newScore);
-                allScores[currentSize].sort((a, b) => a.time - b.time);
-                allScores[currentSize] = allScores[currentSize].slice(0, 10);
-                
-                await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
-                    method: 'PUT',
-                    headers: {
-                        'X-Master-Key': JSONBIN_API_KEY,
-                        'Content-Type': 'application/json',
-                        'X-Bin-Versioning': 'false'
-                    },
-                    body: JSON.stringify(allScores)
-                });
+                // Jeśli nowy wynik jest lepszy niż najlepszy istniejący, zaktualizuj
+                if (time < bestExistingGlobalTime) {
+                    // Usuń wszystkie wcześniejsze wyniki dla tego nicka
+                    globalScores = globalScores.filter(
+                        score => score.nick.toLowerCase().trim() !== normalizedNick
+                    );
+                    
+                    globalScores.push(newScore);
+                    globalScores.sort((a, b) => a.time - b.time);
+                    
+                    // Zapisz 67 najlepszych wyników
+                    allScores[currentSize] = globalScores.slice(0, 67);
+                    
+                    // Sprawdź czy to nowy rekord (pierwsze miejsce)
+                    if (globalScores.length > 0 && globalScores[0].time === time) {
+                        isNewGlobalRecord = true;
+                    }
+                    
+                    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+                        method: 'PUT',
+                        headers: {
+                            'X-Master-Key': JSONBIN_API_KEY,
+                            'Content-Type': 'application/json',
+                            'X-Bin-Versioning': 'false'
+                        },
+                        body: JSON.stringify(allScores)
+                    });
+                }
             }
         } catch (error) {
             console.error("Błąd synchronizacji z serwerem:", error);
@@ -1450,7 +1471,7 @@
         let globalScores = [];
         let localScores = [];
         
-        // Get global scores
+        // Get global scores (67 najlepszych)
         try {
             const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
                 headers: { 'X-Master-Key': JSONBIN_API_KEY }
@@ -1458,13 +1479,17 @@
             
             if (response.ok) {
                 const data = await response.json();
-                globalScores = data.record[selectedSize] || [];
+                const allScores = data.record || { "7": [], "12": [], "15": [] };
+                globalScores = allScores[selectedSize] || [];
+                // Sortuj i weź 67 najlepszych
+                globalScores.sort((a, b) => a.time - b.time);
+                globalScores = globalScores.slice(0, 67);
             }
         } catch (error) {
             console.error("Błąd pobierania rankingu globalnego:", error);
         }
         
-        // Get local scores
+        // Get local scores (10 najlepszych)
         const key = `scores_${selectedSize}`;
         localScores = JSON.parse(localStorage.getItem(key) || '[]');
         
@@ -1473,12 +1498,12 @@
             const globalHeader = document.createElement('tr');
             globalHeader.innerHTML = `
                 <td colspan="3" class="ranking-header global-header">
-                    🌍 Ranking Globalny (${globalScores.length})
+                    🌍 Ranking Globalny (Top 67)
                 </td>
             `;
             scoresEl.appendChild(globalHeader);
             
-            globalScores.slice(0, 10).forEach((score, index) => {
+            globalScores.forEach((score, index) => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${getMedalEmoji(index)}</td>
@@ -1499,12 +1524,12 @@
             const localHeader = document.createElement('tr');
             localHeader.innerHTML = `
                 <td colspan="3" class="ranking-header local-header">
-                    🏠 Ranking Lokalny (${localScores.length})
+                    🏠 Ranking Lokalny (Top 10)
                 </td>
             `;
             scoresEl.appendChild(localHeader);
             
-            localScores.slice(0, 10).forEach((score, index) => {
+            localScores.forEach((score, index) => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${getMedalEmoji(index)}</td>
